@@ -198,7 +198,7 @@ class DeforestationClassifier:
             if len(forested) == n_each and len(non_forested) == n_each: break
 
         samples = forested + non_forested
-        fig, axes = plt.subplots(len(samples), 3, figsize=(12, 4 * len(samples)))
+        fig, axes = plt.subplots(len(samples), 3, figsize=(4, 2 * len(samples)))
         for row, idx in enumerate(samples):
             img_raw = load_img(val_imgs[idx], target_size=self.img_size)
             binary_pred = self.predict(val_imgs[idx])
@@ -218,7 +218,19 @@ class DeforestationClassifier:
 
 # --- RUN ---
 if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Deforestation Classifier')
+    parser.add_argument('image', nargs='?', help='Path to an image to run prediction on')
+    args = parser.parse_args()
+
     DATA_DIR = '/Users/jsmith/.cache/kagglehub/datasets/balraj98/deepglobe-land-cover-classification-dataset/versions/2' + '/train'
     classifier = DeforestationClassifier(data_dir=DATA_DIR)
-    classifier.get() 
-    classifier.visualize_predictions(n_each=5)
+    classifier.get()
+
+    if args.image:
+        mask = classifier.predict(args.image)
+        deforestation_pct = (1 - mask.mean()) * 100
+        print(f"Deforestation: {deforestation_pct:.1f}%")
+    else:
+        classifier.visualize_predictions(n_each=5)

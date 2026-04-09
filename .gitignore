@@ -1,1 +1,5 @@
+/__pycache__
 /dataset
+/gee_captures
+/output
+deforestation_model_final.keras
