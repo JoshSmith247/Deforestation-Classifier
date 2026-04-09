@@ -196,5 +196,7 @@ def visualize_predictions(image_paths, mask_paths, model, n_each=3, start_idx=0)
     plt.tight_layout()
     plt.show()
 
-print("\nValidation predictions (3 forested + 3 non-forested):")
-visualize_predictions(image_paths, mask_paths, model, n_each=3, start_idx=split)
+num_demo = 10
+
+print(f"\nValidation predictions ({num_demo} forested + {num_demo} non-forested):")
+visualize_predictions(image_paths, mask_paths, model, n_each=num_demo, start_idx=split)
