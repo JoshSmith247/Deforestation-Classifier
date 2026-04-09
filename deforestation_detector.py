@@ -218,19 +218,7 @@ class DeforestationClassifier:
 
 # --- RUN ---
 if __name__ == '__main__':
-    import argparse
-
-    parser = argparse.ArgumentParser(description='Deforestation Classifier')
-    parser.add_argument('image', nargs='?', help='Path to an image to run prediction on')
-    args = parser.parse_args()
-
     DATA_DIR = '/Users/jsmith/.cache/kagglehub/datasets/balraj98/deepglobe-land-cover-classification-dataset/versions/2' + '/train'
     classifier = DeforestationClassifier(data_dir=DATA_DIR)
-    classifier.get()
-
-    if args.image:
-        mask = classifier.predict(args.image)
-        deforestation_pct = (1 - mask.mean()) * 100
-        print(f"Deforestation: {deforestation_pct:.1f}%")
-    else:
-        classifier.visualize_predictions(n_each=5)
+    classifier.get() 
+    classifier.visualize_predictions(n_each=5)

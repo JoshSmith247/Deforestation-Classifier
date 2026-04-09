@@ -198,7 +198,11 @@ def _plot_trend(results: dict):
 
 if __name__ == '__main__':
     # Rondônia, Brazil — one of the most heavily deforested areas of the Amazon
-    AMAZON_BBOX = [-65.0, -13.0, -59.0, -8.0]  # [west, south, east, north]
+    # AMAZON_BBOX = [-65.0, -13.0, -59.0, -8.0]  # [west, south, east, north]
+    # AMAZON_BBOX = [-63.0, -11.5, -62.0, -10.5] # Smaller region
+    AMAZON_BBOX = [-62.45, -10.95, -62.35, -10.85] # Best so
+    # AMAZON_BBOX = [-62.425, -10.425, -62.375, -10.375]
+    # AMAZON_BBOX = [-62.41, -10.41, -62.39, -10.39]
     YEARS       = list(range(2015, 2024))
     GEE_PROJECT = 'amazon-analysis-492817'
 
