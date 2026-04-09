@@ -6,85 +6,75 @@ import os
 from tensorflow.keras.utils import load_img, img_to_array
 
 # --- CONFIGURATION ---
-IMG_SIZE = (256, 256)
-BATCH_SIZE = 16
-EPOCHS = 40
-LEARNING_RATE = 1e-4
+IMG_SIZE        = (256, 256)
+BATCH_SIZE      = 16
+EPOCHS          = 40
+LEARNING_RATE   = 1e-4
 MODEL_SAVE_PATH = 'deforestation_model_final.keras'
-DATA_DIR = '/kaggle/input/deepglobe-land-cover-classification-dataset/train'
+DATA_DIR        = '/kaggle/input/deepglobe-land-cover-classification-dataset/train'
 
 if os.path.exists(MODEL_SAVE_PATH):
     os.remove(MODEL_SAVE_PATH)
     print("Old model removed. Starting fresh.")
 
-# --- DeepGlobe label palette ---
-# (0,255,0)   = Forest        ← what we want
-# (255,255,0) = Agriculture
-# (0,255,255) = Water
-# (255,255,255)= Urban/barren
-# (255,0,255) = Rangeland
-# (255,0,0)   = Unknown/cloud
-
 # --- PATH LOADER ---
 def load_paths(base_path):
     sat_images  = sorted([os.path.join(base_path, f) for f in os.listdir(base_path) if f.endswith('_sat.jpg')])
     mask_images = sorted([os.path.join(base_path, f) for f in os.listdir(base_path) if f.endswith('_mask.png')])
-    rng = np.random.default_rng(42)
+    rng     = np.random.default_rng(42)
     indices = rng.permutation(len(sat_images))
     return [sat_images[i] for i in indices], [mask_images[i] for i in indices]
 
-# --- COMPUTE CLASS WEIGHT from a sample of masks ---
-def compute_pos_weight(mask_paths, n=100):
-    """Returns pos_weight = (non_forest_pixels / forest_pixels) for weighted BCE."""
-    forest_total = 0
-    nonforest_total = 0
-    for mp in mask_paths[:n]:
-        mask = tf.io.read_file(mp)
-        mask = tf.image.decode_png(mask, channels=3)
-        mask = tf.image.resize(mask, IMG_SIZE, method='nearest')
-        m = tf.cast(mask, tf.float32)
-        forest = tf.logical_and(
-            tf.logical_and(m[:,:,1] > 200, m[:,:,0] < 50), m[:,:,2] < 50
-        )
-        f = tf.reduce_sum(tf.cast(forest, tf.float32)).numpy()
-        forest_total    += f
-        nonforest_total += (IMG_SIZE[0] * IMG_SIZE[1]) - f
-    pos_weight = nonforest_total / max(forest_total, 1.0)
-    print(f"Computed pos_weight from {n} masks: {pos_weight:.2f}  "
-          f"(forest={forest_total/(forest_total+nonforest_total)*100:.1f}% of pixels)")
-    return pos_weight
+# --- FOREST MASK EXTRACTOR ---
+def extract_forest_mask(mask_tensor):
+    """mask_tensor: float32 HxWx3. Returns float32 HxW with 1=forest, 0=other."""
+    forest = tf.logical_and(
+        tf.logical_and(mask_tensor[:,:,1] > 200, mask_tensor[:,:,0] < 50),
+        mask_tensor[:,:,2] < 50
+    )
+    return tf.cast(forest, tf.float32)
 
 # --- DATA PIPELINE ---
 def process_path(image_path, mask_path, augment=False):
-    img = tf.io.read_file(image_path)
-    img = tf.image.decode_jpeg(img, channels=3)
-    img = tf.image.resize(img, IMG_SIZE) / 255.0
+    img  = tf.io.read_file(image_path)
+    img  = tf.image.decode_jpeg(img, channels=3)
+    img  = tf.image.resize(img, IMG_SIZE) / 255.0
 
     mask = tf.io.read_file(mask_path)
     mask = tf.image.decode_png(mask, channels=3)
     mask = tf.image.resize(mask, IMG_SIZE, method='nearest')
-    m = tf.cast(mask, tf.float32)
+    m    = tf.cast(mask, tf.float32)
 
-    # Forest = pure green (0, 255, 0) in DeepGlobe palette
-    forest_mask = tf.logical_and(
-        tf.logical_and(m[:,:,1] > 200, m[:,:,0] < 50), m[:,:,2] < 50
-    )
-    forest_mask = tf.cast(forest_mask, tf.float32)
-    forest_mask = tf.expand_dims(forest_mask, -1)
+    forest_mask = tf.expand_dims(extract_forest_mask(m), -1)
 
     if augment:
-        combined = tf.concat([img, forest_mask], axis=-1)
-        combined = tf.image.random_flip_left_right(combined)
-        combined = tf.image.random_flip_up_down(combined)
-        k = tf.random.uniform(shape=[], minval=0, maxval=4, dtype=tf.int32)
-        combined = tf.image.rot90(combined, k=k)
+        combined    = tf.concat([img, forest_mask], axis=-1)
+        combined    = tf.image.random_flip_left_right(combined)
+        combined    = tf.image.random_flip_up_down(combined)
+        k           = tf.random.uniform(shape=[], minval=0, maxval=4, dtype=tf.int32)
+        combined    = tf.image.rot90(combined, k=k)
         img         = combined[:, :, :3]
         forest_mask = combined[:, :, 3:]
-        img = tf.image.random_contrast(img, 0.8, 1.2)
-        img = tf.image.random_brightness(img, 0.1)
-        img = tf.clip_by_value(img, 0.0, 1.0)
+        img         = tf.image.random_contrast(img, 0.8, 1.2)
+        img         = tf.image.random_brightness(img, 0.1)
+        img         = tf.clip_by_value(img, 0.0, 1.0)
 
     return img, forest_mask
+
+# --- LOSSES ---
+def dice_loss(y_true, y_pred, smooth=1e-6):
+    """Dice loss: immune to class imbalance, directly optimises overlap."""
+    y_true_f    = tf.reshape(y_true, [-1])
+    y_pred_f    = tf.reshape(y_pred, [-1])
+    intersection = tf.reduce_sum(y_true_f * y_pred_f)
+    return 1.0 - (2.0 * intersection + smooth) / (
+        tf.reduce_sum(y_true_f) + tf.reduce_sum(y_pred_f) + smooth
+    )
+
+def bce_dice_loss(y_true, y_pred):
+    """Combined BCE + Dice: BCE stabilises early training, Dice handles imbalance."""
+    bce  = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+    return tf.reduce_mean(bce) + dice_loss(y_true, y_pred)
 
 # --- MODEL ---
 def conv_block(x, filters, dropout_rate=0.0):
@@ -102,36 +92,24 @@ def conv_block(x, filters, dropout_rate=0.0):
 def build_unet():
     inputs = layers.Input((*IMG_SIZE, 3))
 
-    f1 = conv_block(inputs, 32);         p1 = layers.MaxPooling2D()(f1)
-    f2 = conv_block(p1, 64);             p2 = layers.MaxPooling2D()(f2)
-    f3 = conv_block(p2, 128);            p3 = layers.MaxPooling2D()(f3)
-    f4 = conv_block(p3, 256);            p4 = layers.MaxPooling2D()(f4)
+    f1 = conv_block(inputs, 32);  p1 = layers.MaxPooling2D()(f1)
+    f2 = conv_block(p1,     64);  p2 = layers.MaxPooling2D()(f2)
+    f3 = conv_block(p2,    128);  p3 = layers.MaxPooling2D()(f3)
+    f4 = conv_block(p3,    256);  p4 = layers.MaxPooling2D()(f4)
 
-    b  = conv_block(p4, 512, dropout_rate=0.5)
+    b = conv_block(p4, 512, dropout_rate=0.5)
 
-    u1 = layers.UpSampling2D()(b);  u1 = layers.Concatenate()([u1, f4]); d1 = conv_block(u1, 256, dropout_rate=0.3)
-    u2 = layers.UpSampling2D()(d1); u2 = layers.Concatenate()([u2, f3]); d2 = conv_block(u2, 128, dropout_rate=0.2)
-    u3 = layers.UpSampling2D()(d2); u3 = layers.Concatenate()([u3, f2]); d3 = conv_block(u3, 64)
-    u4 = layers.UpSampling2D()(d3); u4 = layers.Concatenate()([u4, f1]); d4 = conv_block(u4, 32)
+    u1 = layers.Concatenate()([layers.UpSampling2D()(b),  f4]); d1 = conv_block(u1, 256, dropout_rate=0.3)
+    u2 = layers.Concatenate()([layers.UpSampling2D()(d1), f3]); d2 = conv_block(u2, 128, dropout_rate=0.2)
+    u3 = layers.Concatenate()([layers.UpSampling2D()(d2), f2]); d3 = conv_block(u3,  64)
+    u4 = layers.Concatenate()([layers.UpSampling2D()(d3), f1]); d4 = conv_block(u4,  32)
 
     outputs = layers.Conv2D(1, 1, activation='sigmoid')(d4)
     return models.Model(inputs, outputs)
 
-# --- WEIGHTED LOSS (handles class imbalance) ---
-def make_weighted_bce(pos_weight):
-    """Binary cross-entropy where forest pixels are weighted by pos_weight."""
-    def weighted_bce(y_true, y_pred):
-        bce = tf.keras.backend.binary_crossentropy(y_true, y_pred)
-        weight_map = y_true * pos_weight + (1.0 - y_true)
-        return tf.reduce_mean(weight_map * bce)
-    return weighted_bce
-
 # --- SETUP ---
 image_paths, mask_paths = load_paths(DATA_DIR)
 split = int(0.8 * len(image_paths))
-
-print("Computing class balance from training masks...")
-pos_weight = compute_pos_weight(mask_paths[:split], n=100)
 
 train_ds = (tf.data.Dataset.from_tensor_slices((image_paths[:split], mask_paths[:split]))
             .shuffle(1000)
@@ -145,7 +123,7 @@ val_ds = (tf.data.Dataset.from_tensor_slices((image_paths[split:], mask_paths[sp
 model = build_unet()
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
-    loss=make_weighted_bce(pos_weight),
+    loss=bce_dice_loss,
     metrics=[
         tf.keras.metrics.BinaryIoU(target_class_ids=[1], threshold=0.5, name='forest_iou'),
         tf.keras.metrics.BinaryIoU(target_class_ids=[0, 1], threshold=0.5, name='mean_iou'),
@@ -153,44 +131,70 @@ model.compile(
 )
 
 callbacks = [
-    tf.keras.callbacks.EarlyStopping(monitor='val_forest_iou', patience=8,
+    tf.keras.callbacks.EarlyStopping(monitor='val_forest_iou', patience=10,
                                      restore_best_weights=True, mode='max'),
     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_forest_iou', factor=0.5,
-                                         patience=3, mode='max'),
+                                         patience=4, mode='max', min_lr=1e-6),
     tf.keras.callbacks.ModelCheckpoint(MODEL_SAVE_PATH, monitor='val_forest_iou',
                                        save_best_only=True, mode='max'),
 ]
 
-print(f"\nTraining on {split} images, validating on {len(image_paths)-split}...")
+print(f"Training on {split} images, validating on {len(image_paths) - split}...")
 model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS, callbacks=callbacks)
 
-# --- VISUALIZE PREDICTIONS ---
-def visualize_predictions(image_paths, mask_paths, model, n=6, start_idx=0):
-    fig, axes = plt.subplots(n, 3, figsize=(12, 4 * n))
-    for row, idx in enumerate(range(start_idx, start_idx + n)):
-        img_raw = load_img(image_paths[idx], target_size=IMG_SIZE)
-        img_arr = img_to_array(img_raw) / 255.0
-        pred    = model.predict(np.expand_dims(img_arr, 0), verbose=0)[0]
-        binary_pred = (pred > 0.5).squeeze()
+# --- VISUALIZE: balanced forested / non-forested sample ---
+def visualize_predictions(image_paths, mask_paths, model, n_each=3, start_idx=0):
+    val_imgs  = image_paths[start_idx:]
+    val_masks = mask_paths[start_idx:]
 
-        mask = tf.io.read_file(mask_paths[idx])
+    forested, non_forested = [], []
+    for idx in range(min(300, len(val_imgs))):
+        mask = tf.io.read_file(val_masks[idx])
         mask = tf.image.decode_png(mask, channels=3)
         mask = tf.image.resize(mask, IMG_SIZE, method='nearest')
-        m    = tf.cast(mask, tf.float32)
-        true_mask = tf.logical_and(
-            tf.logical_and(m[:,:,1] > 200, m[:,:,0] < 50), m[:,:,2] < 50
-        ).numpy()
+        pct  = tf.reduce_mean(extract_forest_mask(tf.cast(mask, tf.float32))).numpy() * 100
+        if pct > 10 and len(forested) < n_each:
+            forested.append(idx)
+        elif pct < 5 and len(non_forested) < n_each:
+            non_forested.append(idx)
+        if len(forested) == n_each and len(non_forested) == n_each:
+            break
+
+    samples = forested + non_forested
+    fig, axes = plt.subplots(len(samples), 3, figsize=(12, 4 * len(samples)))
+    if len(samples) == 1:
+        axes = [axes]
+
+    for row, idx in enumerate(samples):
+        img_raw     = load_img(val_imgs[idx], target_size=IMG_SIZE)
+        img_arr     = img_to_array(img_raw) / 255.0
+        pred        = model.predict(np.expand_dims(img_arr, 0), verbose=0)[0]
+        binary_pred = (pred > 0.5).squeeze()
+
+        mask      = tf.io.read_file(val_masks[idx])
+        mask      = tf.image.decode_png(mask, channels=3)
+        mask      = tf.image.resize(mask, IMG_SIZE, method='nearest')
+        true_mask = extract_forest_mask(tf.cast(mask, tf.float32)).numpy().astype(bool)
 
         forest_pct = np.mean(binary_pred) * 100
-        iou = np.sum(binary_pred & true_mask) / np.sum(binary_pred | true_mask) if np.sum(binary_pred | true_mask) > 0 else 0.0
+        true_pct   = np.mean(true_mask) * 100
+        union      = np.sum(binary_pred | true_mask)
+        iou        = np.sum(binary_pred & true_mask) / union if union > 0 else 1.0
 
-        axes[row, 0].imshow(img_raw);                          axes[row, 0].set_title("Satellite");           axes[row, 0].axis('off')
-        axes[row, 1].imshow(true_mask, cmap='Greens');         axes[row, 1].set_title("Ground truth");        axes[row, 1].axis('off')
-        axes[row, 2].imshow(binary_pred, cmap='Greens');       axes[row, 2].set_title(f"Pred  Forest:{forest_pct:.0f}%  IoU:{iou:.2f}"); axes[row, 2].axis('off')
+        axes[row][0].imshow(img_raw)
+        axes[row][0].set_title(f"Satellite  (true forest: {true_pct:.0f}%)")
+        axes[row][0].axis('off')
+
+        axes[row][1].imshow(true_mask.astype(np.uint8) * 255, cmap='gray', vmin=0, vmax=255)
+        axes[row][1].set_title("Ground truth")
+        axes[row][1].axis('off')
+
+        axes[row][2].imshow(binary_pred.astype(np.uint8) * 255, cmap='gray', vmin=0, vmax=255)
+        axes[row][2].set_title(f"Pred  Forest:{forest_pct:.0f}%  IoU:{iou:.2f}")
+        axes[row][2].axis('off')
 
     plt.tight_layout()
     plt.show()
 
-# Show 6 validation samples — mix of forested and non-forested
-print("\nValidation predictions:")
-visualize_predictions(image_paths, mask_paths, model, n=6, start_idx=split)
+print("\nValidation predictions (3 forested + 3 non-forested):")
+visualize_predictions(image_paths, mask_paths, model, n_each=3, start_idx=split)
