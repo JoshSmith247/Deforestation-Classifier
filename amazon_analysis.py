@@ -14,20 +14,19 @@ def init_gee(project: str):
 
 # --- 2. FETCH IMAGES ---
 
-def _mask_landsat_sr(image):
-    """Mask fill, cloud shadow, and cloud pixels using the QA_PIXEL band."""
-    qa = image.select('QA_PIXEL')
+def _mask_s2_clouds(image):
+    """Mask clouds and cirrus using Sentinel-2's QA60 band."""
+    qa = image.select('QA60')
     mask = (
-        qa.bitwiseAnd(1 << 0).eq(0)   # fill
-          .And(qa.bitwiseAnd(1 << 3).eq(0))  # cloud shadow
-          .And(qa.bitwiseAnd(1 << 4).eq(0))  # cloud
+        qa.bitwiseAnd(1 << 10).eq(0)   # opaque clouds
+          .And(qa.bitwiseAnd(1 << 11).eq(0))  # cirrus
     )
     return image.updateMask(mask)
 
 
 def fetch_images(bbox: list[float], years: list[int], output_dir: str = 'gee_captures') -> dict[int, str]:
     """
-    Download one cloud-free Landsat 8 composite image per year for the given bounding box.
+    Download one cloud-free Sentinel-2 composite image per year for the given bounding box.
 
     Args:
         bbox:       [west, south, east, north] in lon/lat degrees
@@ -49,15 +48,14 @@ def fetch_images(bbox: list[float], years: list[int], output_dir: str = 'gee_cap
             paths[year] = filepath
             continue
 
-        # Dry season composite (June–October) — wider window improves pixel coverage
-        # Cloud filter raised to 50 since per-pixel QA masking handles actual clouds
+        # Dry season composite (June–October); per-pixel QA masking handles residual clouds
         collection = (
-            ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+            ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
             .filterBounds(region)
             .filterDate(f'{year}-06-01', f'{year}-10-31')
-            .filter(ee.Filter.lt('CLOUD_COVER', 50))
-            .map(_mask_landsat_sr)
-            .sort('CLOUD_COVER')
+            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 50))
+            .map(_mask_s2_clouds)
+            .sort('CLOUDY_PIXEL_PERCENTAGE')
             .limit(100)
         )
 
@@ -69,15 +67,16 @@ def fetch_images(bbox: list[float], years: list[int], output_dir: str = 'gee_cap
         # Median composite across the masked scenes; unmask fills any remaining gaps with 0
         image = collection.median().unmask(0)
 
-        # Landsat 8 Collection 2 SR bands: B4=Red, B3=Green, B2=Blue
-        rgb = image.select(['SR_B4', 'SR_B3', 'SR_B2'])
+        # Sentinel-2 SR bands: B4=Red (10m), B3=Green (10m), B2=Blue (10m)
+        # SR values are scaled 0–10000 (reflectance × 10000)
+        rgb = image.select(['B4', 'B3', 'B2'])
 
         url = rgb.getThumbURL({
             'region': region,
             'dimensions': 512,   # download at 512 then model resizes to 256
             'format': 'jpg',
-            'min': 7000,
-            'max': 28000,
+            'min': 0,
+            'max': 3000,   # ~30% reflectance covers forest to bright bare soil
             'gamma': 1.4,
         })
 
@@ -129,7 +128,7 @@ def analyze(
     # Run predictions
     results = {}
     for year in sorted(image_paths.keys()):
-        mask = classifier.predict(image_paths[year])
+        mask = classifier.predict(image_paths[year], normalize=True)
         deforestation_pct = (1 - mask.mean()) * 100
         results[year] = {
             'path': image_paths[year],

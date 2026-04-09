@@ -162,9 +162,16 @@ class DeforestationClassifier:
             self.train()
         return self._model
 
-    def predict(self, image, threshold=0.5):
+    def predict(self, image, threshold=0.1, normalize=False):
+        """
+        Args:
+            normalize: Stretch each image's per-channel 2nd–98th percentile to [0, 1]
+                       before inference. Useful when input images have a different
+                       brightness/contrast distribution than the training data (e.g.
+                       Landsat GEE composites vs. DeepGlobe DigitalGlobe imagery).
+        """
         if self._model is None: raise RuntimeError("Model not loaded.")
-        
+
         single = not isinstance(image, list)
         images = [image] if single else image
         batch = []
@@ -176,6 +183,20 @@ class DeforestationClassifier:
                 if arr.max() > 1.0: arr /= 255.0
                 if arr.shape[:2] != self.img_size:
                     arr = tf.image.resize(arr, self.img_size).numpy()
+            if normalize:
+                # Step 1: per-channel percentile stretch (fixes brightness mismatch)
+                p2, p98 = np.percentile(arr, (2, 98), axis=(0, 1), keepdims=True)
+                rng = p98 - p2
+                rng[rng == 0] = 1.0
+                arr = np.clip((arr - p2) / rng, 0.0, 1.0)
+                # Step 2: amplify relative greenness so forest (G > R) reads as
+                # vivid green, matching the DeepGlobe color signature the model
+                # was trained on. Non-vegetated areas (R >= G) are unchanged.
+                g, r = arr[:, :, 1], arr[:, :, 0]
+                veg = np.clip((g - r) / (g + r + 1e-6), 0.0, 1.0)
+                arr = arr.copy()
+                arr[:, :, 1] = np.clip(arr[:, :, 1] + veg * 0.4, 0.0, 1.0)
+                arr[:, :, 0] = np.clip(arr[:, :, 0] - veg * 0.2, 0.0, 1.0)
             batch.append(arr)
 
         preds = self._model.predict(np.stack(batch), verbose=0)
