@@ -208,6 +208,6 @@ if __name__ == '__main__':
     # AMAZON_BBOX = [-52.5, -13.1, -52.4, -13.0]
     # AMAZON_BBOX = [-62.55, -10.85, -62.45, -10.75] # General High Deforestation
     YEARS       = list(range(2015, 2024))
-    GEE_PROJECT = 'amazon-analysis-492817'
+    GEE_PROJECT = 'PROJECT-KEY-HERE'
 
     analyze(AMAZON_BBOX, YEARS, gee_project=GEE_PROJECT)

@@ -55,8 +55,8 @@ class DeforestationClassifier:
     def _extract_forest_mask(self, mask_tensor):
         """Logic for DeepGlobe: Forest is approx (0, 255, 0)."""
         forest = tf.logical_and(
-            tf.logical_and(mask_tensor[:, :, 1] > 200, mask_tensor[:, :, 0] < 50),
-            mask_tensor[:, :, 2] < 50
+            mask_tensor[:, :, 1] > 150,
+            tf.logical_and(mask_tensor[:, :, 0] < 100, mask_tensor[:, :, 2] < 100)
         )
         return tf.cast(forest, tf.float32)
 
@@ -142,7 +142,7 @@ class DeforestationClassifier:
 
         callbacks = [
             tf.keras.callbacks.EarlyStopping(monitor='val_forest_iou', patience=10, restore_best_weights=True, mode='max'),
-            tf.keras.callbacks.ReduceLROnPlateau(monitor='val_forest_iou', factor=0.5, patience=4, mode='max'),
+            tf.keras.callbacks.ReduceLROnPlateau(monitor='val_forest_iou', factor=0.5, patience=7, mode='max'),
             tf.keras.callbacks.ModelCheckpoint(self.save_path, monitor='val_forest_iou', save_best_only=True, mode='max'),
         ]
 
@@ -239,7 +239,7 @@ class DeforestationClassifier:
 
 # --- RUN ---
 if __name__ == '__main__':
-    DATA_DIR = '/Users/jsmith/.cache/kagglehub/datasets/balraj98/deepglobe-land-cover-classification-dataset/versions/2' + '/train'
+    DATA_DIR = '[Insert output from install.py here]' + '/train'
     classifier = DeforestationClassifier(data_dir=DATA_DIR)
     classifier.get() 
     classifier.visualize_predictions(n_each=5)
