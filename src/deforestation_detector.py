@@ -1,12 +1,10 @@
 import tensorflow as tf
 import keras
 from tensorflow.keras import layers, models, regularizers
+from tensorflow.keras.utils import load_img, img_to_array
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-from tensorflow.keras.utils import load_img, img_to_array
-
-# --- 1. GLOBAL LOSS FUNCTIONS (Required for Flawless Serialization) ---
 
 @tf.keras.utils.register_keras_serializable(package="Custom")
 def dice_loss(y_true, y_pred, smooth=1e-6):
@@ -36,14 +34,15 @@ class DeforestationClassifier:
         learning_rate=1e-4,
         save_path='deforestation_model_final.keras',
     ):
-        self.data_dir      = data_dir
-        self.img_size      = img_size
-        self.batch_size    = batch_size
-        self.epochs        = epochs
+        self.data_dir = data_dir
+        self.img_size = img_size
+        self.batch_size = batch_size
+        self.epochs = epochs
         self.learning_rate = learning_rate
-        self.save_path     = save_path
-        self._model        = None
+        self.save_path = save_path
+        self._model = None
 
+    # Sort images into source arrays via directory scan
     def _load_paths(self):
         base = self.data_dir
         sat_images  = sorted([os.path.join(base, f) for f in os.listdir(base) if f.endswith('_sat.jpg')])
@@ -52,6 +51,8 @@ class DeforestationClassifier:
         indices = rng.permutation(len(sat_images))
         return [sat_images[i] for i in indices], [mask_images[i] for i in indices]
 
+    # Extract the mask dedicated to forested areas from the mask file
+    # [New term alert] Tensor = a 3d vector/matrix/array
     def _extract_forest_mask(self, mask_tensor):
         """Logic for DeepGlobe: Forest is approx (0, 255, 0)."""
         forest = tf.logical_and(
@@ -60,6 +61,9 @@ class DeforestationClassifier:
         )
         return tf.cast(forest, tf.float32)
 
+    # Use tensorflow to read image and corresponding mask, extract forest mask,
+    # add potential image augementations to increase the training data and help
+    # the model identify more dimensions.
     def _process_path(self, image_path, mask_path, augment=False):
         img = tf.io.read_file(image_path)
         img = tf.image.decode_jpeg(img, channels=3)
@@ -86,7 +90,7 @@ class DeforestationClassifier:
 
         return img, forest_mask
 
-    @staticmethod
+    @staticmethod # Can be called without class instantiation
     def _conv_block(x, filters, dropout_rate=0.0):
         reg = regularizers.l2(1e-4)
         x = layers.Conv2D(filters, 3, padding='same', use_bias=False, kernel_regularizer=reg)(x)
@@ -99,16 +103,14 @@ class DeforestationClassifier:
             x = layers.SpatialDropout2D(dropout_rate)(x)
         return x
 
+    # Define the layers of the u-net
     def _build_unet(self):
         inputs = layers.Input((*self.img_size, 3))
-        # Encoder
         f1 = self._conv_block(inputs, 32);  p1 = layers.MaxPooling2D()(f1)
         f2 = self._conv_block(p1,     64);  p2 = layers.MaxPooling2D()(f2)
         f3 = self._conv_block(p2,    128);  p3 = layers.MaxPooling2D()(f3)
         f4 = self._conv_block(p3,    256);  p4 = layers.MaxPooling2D()(f4)
-        # Bridge
         b = self._conv_block(p4, 512, dropout_rate=0.5)
-        # Decoder
         u1 = layers.Concatenate()([layers.UpSampling2D()(b),  f4]); d1 = self._conv_block(u1, 256, dropout_rate=0.3)
         u2 = layers.Concatenate()([layers.UpSampling2D()(d1), f3]); d2 = self._conv_block(u2, 128, dropout_rate=0.2)
         u3 = layers.Concatenate()([layers.UpSampling2D()(d2), f2]); d3 = self._conv_block(u3,  64)
@@ -117,6 +119,9 @@ class DeforestationClassifier:
         outputs = layers.Conv2D(1, 1, activation='sigmoid')(d4)
         return models.Model(inputs, outputs)
 
+    # Split dataset into training and validation. Build the U-net, and compile
+    # the model with optimizers, appropriate loss function, metrics for tracking
+    # success. Then train!
     def train(self):
         image_paths, mask_paths = self._load_paths()
         split = int(0.8 * len(image_paths))
@@ -149,10 +154,10 @@ class DeforestationClassifier:
         self._model.fit(train_ds, validation_data=val_ds, epochs=self.epochs, callbacks=callbacks)
         return self._model
 
+    # Load saved model from designated path as opposed to training a new one
     def get(self, new=False):
         if not new and os.path.exists(self.save_path):
             print(f"Loading saved model from {self.save_path}...")
-            # Use registered function names in custom_objects
             self._model = tf.keras.models.load_model(
                 self.save_path,
                 custom_objects={'bce_dice_loss': bce_dice_loss, 'dice_loss': dice_loss}
@@ -162,14 +167,9 @@ class DeforestationClassifier:
             self.train()
         return self._model
 
+    # Predict mask based on trained model
     def predict(self, image, threshold=0.1, normalize=False):
-        """
-        Args:
-            normalize: Stretch each image's per-channel 2nd–98th percentile to [0, 1]
-                       before inference. Useful when input images have a different
-                       brightness/contrast distribution than the training data (e.g.
-                       Landsat GEE composites vs. DeepGlobe DigitalGlobe imagery).
-        """
+        # Critical: Must train or load before predicting
         if self._model is None: raise RuntimeError("Model not loaded.")
 
         single = not isinstance(image, list)
@@ -203,6 +203,7 @@ class DeforestationClassifier:
         masks = (preds.squeeze(-1) > threshold)
         return masks[0] if single else masks
 
+    # Display test and validation output using MatPlotLib
     def visualize_predictions(self, n_each=3):
         image_paths, mask_paths = self._load_paths()
         split = int(0.8 * len(image_paths))
@@ -219,11 +220,14 @@ class DeforestationClassifier:
             if len(forested) == n_each and len(non_forested) == n_each: break
 
         samples = forested + non_forested
-        fig, axes = plt.subplots(len(samples), 3, figsize=(4, 2 * len(samples)))
+        if not samples:
+            print("No validation samples found to display.")
+            return
+        fig, axes = plt.subplots(len(samples), 3, figsize=(4, 2 * len(samples)), squeeze=False)
         for row, idx in enumerate(samples):
             img_raw = load_img(val_imgs[idx], target_size=self.img_size)
             binary_pred = self.predict(val_imgs[idx])
-            
+
             mask_raw = tf.io.read_file(val_masks[idx])
             mask_raw = tf.image.decode_png(mask_raw, channels=3)
             mask_raw = tf.image.resize(mask_raw, self.img_size, method='nearest')
@@ -237,9 +241,9 @@ class DeforestationClassifier:
             axes[row][2].imshow(binary_pred, cmap='Greens_r'); axes[row][2].set_title(f"Prediction\nDeforestation: {pred_deforestation_pct:.1f}%"); axes[row][2].axis('off')
         plt.tight_layout(); plt.show()
 
-# --- RUN ---
+# Runs when training completes
 if __name__ == '__main__':
-    DATA_DIR = '[Insert output from install.py here]' + '/train'
+    DATA_DIR = os.environ['DATASET_PATH'] + '/train'
     classifier = DeforestationClassifier(data_dir=DATA_DIR)
-    classifier.get() 
-    classifier.visualize_predictions(n_each=5)
+    classifier.get()
+    classifier.visualize_predictions(n_each=1)
