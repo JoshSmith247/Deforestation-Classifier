@@ -98,7 +98,6 @@ def analyze(
     years: list[int],
     model_path: str = 'deforestation_model_final.keras',
     gee_project: str = 'your-gee-project-id',
-    output_dir: str = 'output',
 ):
     """
     Full pipeline: authenticate GEE, fetch images, run predictions, plot results.
@@ -108,7 +107,6 @@ def analyze(
         years:       list of years to analyze
         model_path:  path to saved .keras model
         gee_project: your Google Earth Engine project ID
-        output_dir:  folder to save output charts
     """
     init_gee(gee_project)
 
@@ -139,20 +137,22 @@ def analyze(
         }
         print(f"[{year}] Deforestation: {deforestation_pct:.1f}%")
 
-    os.makedirs(output_dir, exist_ok=True)
-    _plot_maps(results, output_dir)
-    _plot_trend(results, output_dir)
+    os.makedirs('blog_figures', exist_ok=True)
+    _plot_maps(results)
+    _plot_trend(results)
 
     return results
 
 # --- 4. VISUALIZE ---
 
-def _plot_maps(results: dict, output_dir: str):
+def _plot_maps(results: dict):
     """Side-by-side satellite image and predicted forest mask for each year."""
     years = sorted(results.keys())
     n = len(years)
 
-    _, axes = plt.subplots(n, 2, figsize=(10, 4 * n), squeeze=False)
+    _, axes = plt.subplots(n, 2, figsize=(10, 4 * n))
+    if n == 1:
+        axes = [axes]
 
     for i, year in enumerate(years):
         r = results[year]
@@ -167,13 +167,12 @@ def _plot_maps(results: dict, output_dir: str):
         axes[i][1].axis('off')
 
     plt.tight_layout()
-    path = os.path.join(output_dir, 'amazon_deforestation_maps.png')
-    plt.savefig(path, dpi=150, bbox_inches='tight')
-    print(f"Saved: {path}")
+    plt.savefig('blog_figures/amazon_deforestation_maps.png', dpi=150, bbox_inches='tight')
+    print("Saved: amazon_deforestation_maps.png")
     plt.show()
 
 
-def _plot_trend(results: dict, output_dir: str):
+def _plot_trend(results: dict):
     """Line chart of deforestation % over time."""
     years = sorted(results.keys())
     pcts  = [results[y]['deforestation_pct'] for y in years]
@@ -190,9 +189,8 @@ def _plot_trend(results: dict, output_dir: str):
     ax.legend()
 
     plt.tight_layout()
-    path = os.path.join(output_dir, 'amazon_deforestation_trend.png')
-    plt.savefig(path, dpi=150, bbox_inches='tight')
-    print(f"Saved: {path}")
+    plt.savefig('blog_figures/amazon_deforestation_trend.png', dpi=150, bbox_inches='tight')
+    print("Saved: amazon_deforestation_trend.png")
     plt.show()
 
 # --- RUN ---
@@ -206,9 +204,9 @@ if __name__ == '__main__':
     # AMAZON_BBOX = [-62.41, -10.41, -62.39, -10.39]
     # Other
     # AMAZON_BBOX = [-60.1, -3.2, -60.0, -3.1]
-    #AMAZON_BBOX = [-55.5, -7.6, -55.4, -7.5] # Good second option
+    AMAZON_BBOX = [-55.5, -7.6, -55.4, -7.5] # Good second option
     # AMAZON_BBOX = [-52.5, -13.1, -52.4, -13.0]
-    AMAZON_BBOX = [-62.55, -10.85, -62.45, -10.75] # General High Deforestation
+    # AMAZON_BBOX = [-62.55, -10.85, -62.45, -10.75] # General High Deforestation
     YEARS       = list(range(2015, 2024))
     GEE_PROJECT = 'amazon-analysis-492817'
 

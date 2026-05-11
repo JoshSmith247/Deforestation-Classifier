@@ -14,4 +14,5 @@ analyze(
     bbox=[-55.5, -7.6, -55.4, -7.5], # [-62.55, -10.85, -62.45, -10.75] # High deforestation demo
     years=list(range(2015, 2024)),
     gee_project='amazon-analysis-492817',
+    output_dir='blog_figures',
 )
