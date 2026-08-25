@@ -2,7 +2,7 @@
 
 Authors: Joshua Smith, Evan Schmelkin
 
-![Deforestation]([https://ecologi.com/resources/blog/industries-and-sectors-driving-deforestation-what-you-need-to-know](https://cnr.ncsu.edu/news/wp-content/uploads/sites/10/2021/11/11182021-amazon-deforestation-istock-featured.jpg))
+![Deforestation](https://cnr.ncsu.edu/news/wp-content/uploads/sites/10/2021/11/11182021-amazon-deforestation-istock-featured.jpg)
 
 A deep learning project that detects and tracks deforestation in the Amazon rainforest using satellite imagery.
 
